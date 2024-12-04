@@ -1,0 +1,352 @@
+---
+title: "Final project"
+author: "Mehul Gupta"
+date: "2024-05-12"
+output: html_document
+---
+```{r}
+setwd("~/Library/CloudStorage/Box-Box/2023-24/Spring 2024/Time Series Analysis & Forecasting")
+suppressPackageStartupMessages(library(tidyverse))
+suppressPackageStartupMessages(library(fpp3))
+suppressPackageStartupMessages(library(forecast))
+suppressPackageStartupMessages(library(fable))
+suppressPackageStartupMessages(library(ggplot2))
+suppressPackageStartupMessages(library(tsibble))
+suppressPackageStartupMessages(library(urca))
+suppressPackageStartupMessages(library(fracdiff))
+suppressPackageStartupMessages(library(broom))
+suppressPackageStartupMessages(library(zoo))
+suppressPackageStartupMessages(library(MLmetrics))
+library(tsoutliers)
+```
+
+```{r}
+# Read in data
+traffic <- read.csv("traffic.csv")
+
+# Get rid of missing values
+traffic <- traffic %>% filter(complete.cases(traffic))
+traffic <- distinct(traffic)
+
+# Convert DateTime column
+traffic$DateTime <- strptime(traffic$DateTime, format = "%Y-%m-%d %H:%M:%S")
+
+# Separate into different junctions 
+traffic_j1 <- traffic %>% 
+  filter(Junction == 1)
+
+traffic_j2 <- traffic %>% 
+  filter(Junction == 2)
+
+traffic_j3 <- traffic %>% 
+  filter(Junction == 3)
+
+traffic_j4 <- traffic %>% 
+  filter(Junction == 4)
+```
+
+```{r}
+# Replace outliers
+outliers <- tsoutliers(traffic_j1$log_vehicles)
+traffic_j1$log_vehicles[outliers$index] <- outliers$replacements
+
+outliers <- tsoutliers(traffic_j1$Vehicles)
+traffic_j1$Vehicles[outliers$index] <- outliers$replacements
+
+outliers <- tsoutliers(traffic_j2$log_vehicles)
+traffic_j2$log_vehicles[outliers$index] <- outliers$replacements
+
+outliers <- tsoutliers(traffic_j2$Vehicles)
+traffic_j2$Vehicles[outliers$index] <- outliers$replacements
+
+outliers <- tsoutliers(traffic_j3$log_vehicles)
+traffic_j3$log_vehicles[outliers$index] <- outliers$replacements
+
+outliers <- tsoutliers(traffic_j3$Vehicles)
+traffic_j3$Vehicles[outliers$index] <- outliers$replacements
+
+outliers <- tsoutliers(traffic_j4$log_vehicles)
+traffic_j4$log_vehicles[outliers$index] <- outliers$replacements
+
+outliers <- tsoutliers(traffic_j4$Vehicles)
+traffic_j4$Vehicles[outliers$index] <- outliers$replacements
+```
+
+
+```{r}
+# Change time column into a frequency
+traffic_j1 <- traffic_j1 %>% 
+  mutate(Time = row_number()) %>% 
+  mutate(log_vehicles = log(Vehicles)) 
+
+traffic_j2 <- traffic_j2 %>% 
+  mutate(Time = row_number()) %>% 
+  mutate(log_vehicles = log(Vehicles))
+
+traffic_j3 <- traffic_j3 %>% 
+  mutate(Time = row_number()) %>% 
+  mutate(log_vehicles = log(Vehicles))
+
+traffic_j4 <- traffic_j4 %>% 
+  mutate(Time = row_number()) %>% 
+  mutate(log_vehicles = log(Vehicles))
+
+# Convert dataframe to a time series 
+traffic_ts_j1 <- as_tsibble(traffic_j1, index = Time)
+traffic_ts_j2 <- as_tsibble(traffic_j2, index = Time)
+traffic_ts_j3 <- as_tsibble(traffic_j3, index = Time)
+traffic_ts_j4 <- as_tsibble(traffic_j4, index = Time)
+
+# Split the data into the test set and training set 
+traffic_ts_j1_train <- 
+  traffic_ts_j1[1:11674, ]
+traffic_ts_j1_test <- 
+  traffic_ts_j1[11675:nrow(traffic_ts_j1), ]
+
+traffic_ts_j2_train <- 
+  traffic_ts_j2[1:11674, ]
+traffic_ts_j2_test <- 
+  traffic_ts_j2[11675:nrow(traffic_ts_j2), ]
+
+traffic_ts_j3_train <- 
+  traffic_ts_j3[1:11674, ]
+traffic_ts_j3_test <- 
+  traffic_ts_j3[11675:nrow(traffic_ts_j3), ]
+
+traffic_ts_j4_train <- 
+  traffic_ts_j4[1:3475, ]
+traffic_ts_j4_test <- 
+  traffic_ts_j4[3476:nrow(traffic_ts_j4), ]
+```
+
+```{r}
+# Plot of the data
+traffic_ts_j1 %>% 
+  autoplot(Vehicles) +
+  labs(title = "TS of Vehicles at Junction 1")
+
+traffic_ts_j2 %>% 
+  autoplot(Vehicles) +
+  labs(title = "TS of Vehicles at Junction 2")
+
+traffic_ts_j3 %>% 
+  autoplot(Vehicles) + 
+  labs(title = "TS of Vehicles at Junction 3")
+
+traffic_ts_j4 %>% 
+  autoplot(Vehicles) +
+  labs(title = "TS of Vehicles at Junction 4")
+
+# Plots of first 2 junctions using log
+traffic_ts_j1 %>% 
+  autoplot(log(Vehicles)) +
+  labs(title = "TS of Log Vehicles at Junction 1")
+
+traffic_ts_j2 %>% 
+  autoplot(log(Vehicles)) +
+  labs(title = "TS of Log Vehicles at Junction 2")
+```
+```{r}
+# Plots of the errors, PACF, and ACF for each junction
+traffic_ts_j1 %>% 
+  gg_tsdisplay(log_vehicles, plot_type = 'partial') +
+  labs(title = "Errors, PACF, and ACF for Junction 1 (Log Vehicles)")
+
+traffic_ts_j2 %>% 
+  gg_tsdisplay(log_vehicles, plot_type = 'partial') +
+  labs(title = "Errors, PACF, and ACF for Junction 2 (Log Vehicles)")
+
+traffic_ts_j3 %>% 
+  gg_tsdisplay(Vehicles, plot_type = 'partial') +
+  labs(title = "Errors, PACF, and ACF for Junction 3 (Vehicles)")
+
+traffic_ts_j4 %>% 
+  gg_tsdisplay(Vehicles, plot_type = 'partial') +
+  labs(title = "Errors, PACF, and ACF for Junction 4 (Vehicles)")
+```
+
+
+```{r}
+# Fit an ARIMA model with errors to the data
+# For Junction 1 and 2, take the log of the data
+arima_j1_log <- traffic_ts_j1_train %>% 
+  model(ARIMA(log_vehicles ~ Time))
+
+arima_j2_log <- traffic_ts_j2_train %>% 
+  model(ARIMA(log_vehicles ~ Time))
+
+# For Junctions 3 and 4, rune models with and without log
+arima_j3 <- traffic_ts_j3_train %>% 
+  model(ARIMA(Vehicles ~ Time))
+
+arima_j4 <- traffic_ts_j4_train %>% 
+  model(ARIMA(Vehicles ~ Time))
+
+arima_j3_log <- traffic_ts_j3_train %>% 
+  model(ARIMA(log_vehicles ~ Time))
+
+arima_j4_log <- traffic_ts_j4_train %>% 
+  model(ARIMA(log_vehicles ~ Time))
+```
+
+
+```{r}
+# Report of models
+report(arima_j1_log)
+```
+For junction 1, ARIMA(2,0,4) with Errors
+
+```{r}
+report(arima_j2_log)
+```
+For junction 2, ARIMA(1,0,5) with Errors
+
+```{r}
+report(arima_j3)
+report(arima_j3_log)
+```
+For junction 3 without log, ARIMA(3,0,3) with Errors
+With log, ARIMA(2,0,4) with errors.
+
+```{r}
+report(arima_j4)
+report(arima_j4_log)
+```
+For junction 4 without log, ARIMA(2,0,3) with Errors.
+For junction 4 with log, ARIMA(3,0,3) with Errors.
+
+```{r}
+# Ljung-box test 
+# Assume lag = 10 
+augment(arima_j1_log) %>% 
+  features(.innov, ljung_box, lag = 10)
+
+augment(arima_j2_log) %>% 
+  features(.innov, ljung_box, lag = 10)
+
+augment(arima_j3) %>% 
+  features(.innov, ljung_box, lag = 10)
+
+augment(arima_j3_log) %>% 
+  features(.innov, ljung_box, lag = 10)
+
+augment(arima_j4) %>% 
+  features(.innov, ljung_box, lag = 10)
+
+augment(arima_j4_log) %>% 
+  features(.innov, ljung_box, lag = 10)
+```
+
+```{r}
+# Forecast each arima model. Compare the actual values to the predicted values
+fc_j1 <-
+  arima_j1_log %>% 
+  forecast(h = 2918) 
+
+fc_j2 <-
+  arima_j2_log %>% 
+  forecast(h = 2918)
+
+fc_j3 <-
+  arima_j3 %>% 
+  forecast(h = 2918)
+
+fc_j4 <- 
+  arima_j4 %>% 
+  forecast(h = 869)
+
+fc_j3_log <-
+  arima_j3_log %>% 
+  forecast(h = 2918)
+
+fc_j4_log <- 
+  arima_j4_log %>% 
+  forecast(h = 869)
+```
+
+```{r}
+# Calculate RMSE and MAPE, ARIMA model for junction 1 with log
+rmse_j1 <- sqrt(mean((fc_j1$.mean - traffic_ts_j1_test$log_vehicles)^2))
+print(rmse_j1)
+
+mape_j1 <- 
+  mean(
+    abs((
+      traffic_ts_j1_test$log_vehicles - fc_j1$.mean) / traffic_ts_j1_test$log_vehicles)) * 100
+print(mape_j1)
+
+# Accuracy, ARIMA model for junction 2 with log
+rmse_j2 <- sqrt(mean((fc_j2$.mean - traffic_ts_j2_test$log_vehicles)^2))
+print(rmse_j2)
+
+mape_j2 <-
+  mean(
+  abs((traffic_ts_j2_test$log_vehicles - fc_j2$.mean) / traffic_ts_j2_test$log_vehicles)) * 100
+print(mape_j2)
+
+# Accuracy, ARIMA model for junction 3 without log
+rmse_j3 <- sqrt(mean((fc_j3$.mean - traffic_ts_j3_test$Vehicles)^2))
+print(rmse_j3)
+
+mape_j3 <- 
+  mean(
+    abs((traffic_ts_j3_test$Vehicles - fc_j3$.mean) / traffic_ts_j3_test$Vehicles)) * 100
+print(mape_j3)
+
+
+# Accuracy, ARIMA model for junction 4 without log
+rmse_j4 <- sqrt(mean((fc_j4$.mean - traffic_ts_j4_test$Vehicles)^2))
+print(rmse_j4)
+
+mape_j4 <- 
+  mean(
+    abs((traffic_ts_j4_test$Vehicles - fc_j4$.mean) / traffic_ts_j4_test$Vehicles)) * 100
+print(mape_j4)
+
+# Accuracy, ARIMA model for junction 3 with log
+rmse_j3_log <- sqrt(mean((fc_j3$.mean - traffic_ts_j3_test$log_vehicles)^2))
+print(rmse_j3)
+
+mape_j3_log <- mean(abs((traffic_ts_j3_test$log_vehicles - fc_j3$.mean) / traffic_ts_j3_test$log_vehicles)) * 100
+print(mape_j3)
+
+
+# Accuracy, ARIMA model for junction 4 with log
+rmse_j4_log <- sqrt(mean((fc_j4$.mean - traffic_ts_j4_test$log_vehicles)^2))
+print(rmse_j4)
+
+mape_j4_log <- 
+  mean(
+    abs((traffic_ts_j4_test$log_vehicles - fc_j4$.mean) / traffic_ts_j4_test$log_vehicles)) * 100
+print(mape_j4)
+```
+
+```{r}
+# plot of ARIMA with errors model for J1
+traffic_ts_j1_train %>% 
+  model(ARIMA(log_vehicles ~ Time)) %>% 
+  forecast(h = 2918) %>% 
+  autoplot(traffic_ts_j1_train %>% filter(Time >= 1200), level = NULL) + 
+  labs(y = "Log Vehicles", title = "Log Vehicles with ARIMA errors Forecasts - Junction 1")
+
+# Repeat for J2 
+traffic_ts_j2_train %>% 
+  model(ARIMA(log(Vehicles) ~ Time)) %>% 
+  forecast(h = 2918) %>% 
+  autoplot(traffic_ts_j2_train %>% filter(Time >= 1200), level = NULL) + 
+  labs(y = "Log Vehicles", title = "Log Vehicles with ARIMA errors Forecasts - Junction 2")
+
+# Repeat for j3
+traffic_ts_j3_train %>% 
+  model(ARIMA(Vehicles ~ Time)) %>% 
+  forecast(h = 2918) %>% 
+  autoplot(traffic_ts_j3_train %>% filter(Time >= 1200), level = NULL) + 
+  labs(y = "Vehicles", title = " Vehicles with ARIMA errors Forecasts - Junction 3")  
+
+# Repeat for j4
+traffic_ts_j4_train %>% 
+  model(ARIMA(Vehicles ~ Time)) %>% 
+  forecast(h = 2918) %>% 
+  autoplot(traffic_ts_j4_train %>% filter(Time >= 1200), level = NULL) + 
+  labs(y = "Vehicles", title = " Vehicles with ARIMA errors Forecasts - Junction 4")  
+```

@@ -1,0 +1,687 @@
+---
+title: "Roberts TS Final Data Preprocessing and Exploration"
+author: "Madeleine Roberts"
+date: "2024-05-20"
+output: html_document
+editor_options: 
+  markdown: 
+    wrap: sentence
+---
+## Results:
+
+1.  From plotting the data, we see that we should likely log our data to account for different levels of variance at different time periods.
+
+2.  From the ACF and PCF plots, we see that it is extremely important that our models account for seasonality.
+
+3.  From the Dickey-Fuller and KPSS tests, we see that it that our models should account for differencing in order to make it stationary.
+
+4. We will use tsoutliers to detect and impute outliers at each junction.
+
+5. We see that for all junctions there is a heavy skew to the right.
+
+
+## Data Setup
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library("tidyverse")
+library(readr)
+library("Metrics")
+library(ggplot2)
+library(ggpubr)
+library(fpp3)
+library(forecast)
+options(warn = -1)
+library(fable)
+library(fabletools)
+library(tseries)
+```
+
+```{r, include=FALSE}
+# Clear working memory
+rm(list=ls())
+
+# Set the working directory.
+setwd("/Users/madeleineroberts/rWorkingDirectory")
+```
+
+```{r}
+traffic <- read.csv("traffic.csv")
+
+# Separate into different junctions 
+traffic_j1 <- traffic %>% 
+  filter(Junction == 1)
+
+traffic_j2 <- traffic %>% 
+  filter(Junction == 2)
+
+traffic_j3 <- traffic %>% 
+  filter(Junction == 3)
+
+traffic_j4 <- traffic %>% 
+  filter(Junction == 4)
+
+# Change time column into a frequency
+traffic_j1 <- traffic_j1 %>% 
+  mutate(Time = row_number()) 
+
+traffic_j2 <- traffic_j2 %>% 
+  mutate(Time = row_number()) 
+
+traffic_j3 <- traffic_j3 %>% 
+  mutate(Time = row_number()) 
+
+traffic_j4 <- traffic_j4 %>% 
+  mutate(Time = row_number()) 
+
+# Convert dataframe to a time series 
+traffic_ts_j1 <- as_tsibble(traffic_j1, index = Time)
+traffic_ts_j2 <- as_tsibble(traffic_j2, index = Time)
+traffic_ts_j3 <- as_tsibble(traffic_j3, index = Time)
+traffic_ts_j4 <- as_tsibble(traffic_j4, index = Time)
+```
+
+## Junction 1
+
+**Plot data:**
+
+```{r}
+traffic_ts_j1 %>% 
+  autoplot(Vehicles) +
+  labs(title = "TS of Vehicles at Junction 1")
+```
+
+```{r}
+traffic_ts_j1 %>% 
+  autoplot(log(Vehicles)) +
+  labs(title = "TS of Vehicles at Junction 1")
+```
+
+Logging the data helps with the heteroskdasticity
+
+**Looking at Autocorrelation Function**
+
+```{r}
+ggAcf(traffic_ts_j1$Vehicles)
+pacf(traffic_ts_j1$Vehicles)
+ggAcf(log(traffic_ts_j1$Vehicles))
+pacf(log(traffic_ts_j1$Vehicles))
+```
+
+The ACF plot shows significant autocorrelations at multiple lags, which indicates a persistent, long-term correlation structure.
+This can suggest that the series is not stationary, as stationary time series typically have autocorrelations that diminish quickly.
+
+The PACF plot shows that the partial autocorrelations drop off quickly after a few lags, which might indicate that the series could be autoregressive (AR) with a finite order.
+
+**Perform the Dickey-Fuller test:**
+
+```{r}
+adf_result <- adf.test(log(traffic_ts_j1$Vehicles))
+print(adf_result)
+```
+
+The Dickey-Fuller test was the first statistical test developed to test the null hypothesis that a unit root is present in an autoregressive model of a given time series, and that the process is thus not stationary.
+
+P-value = 0.01: Strong evidence against the null hypothesis.
+Decision: Reject the null hypothesis.
+Conclusion: The time series is likely stationary.
+
+**Perform the KPSS Test:**
+
+```{r}
+kpss_result <- kpss.test(log(traffic_ts_j1$Vehicles))
+print(kpss_result)
+```
+
+P-value = 0.01: Strong evidence against the null hypothesis.
+Decision: Reject the null hypothesis.
+Conclusion: The time series is likely non-stationary, suggesting the presence of a unit root.
+
+ADF Test: Suggests the series is stationary.
+KPSS Test: Suggests the series is non-stationary.
+
+**Difference the data to see if we can resolve the stationary issue:**
+
+```{r}
+# Differencing the series
+traffic_j1_diff <- diff(log(traffic_j1$Vehicles))
+
+# Perform the ADF test on differenced series
+adf_result_diff <- adf.test(traffic_j1_diff)
+print(adf_result_diff)
+
+# Perform the KPSS test on differenced series
+kpss_result_diff <- kpss.test(traffic_j1_diff)
+print(kpss_result_diff)
+```
+
+Given the p-value of 0.1, which is greater than the common significance level of 0.05, we fail to reject the null hypothesis.
+This suggests that the series traffic_j1_diff is likely level stationary.
+There is not enough evidence to conclude that the series has a unit root, indicating that differencing the data might have successfully achieved stationarity.
+
+**Detrend the data to see if we can resolve the stationary issue:**
+
+```{r}
+# Detrending the series
+traffic_j1_detrended <- residuals(lm(log(traffic_j1$Vehicles) ~ time(log(traffic_j1$Vehicles))))
+
+# Perform the ADF test on detrended series
+adf_result_detrended <- adf.test(traffic_j1_detrended)
+print(adf_result_detrended)
+
+# Perform the KPSS test on detrended series
+kpss_result_detrended <- kpss.test(traffic_j1_detrended)
+print(kpss_result_detrended)
+
+```
+
+P-value = 0.01: Strong evidence against the null hypothesis.
+Decision: Reject the null hypothesis.
+Conclusion: The time series is likely non-stationary, suggesting the presence of a unit root.
+
+This suggests that we should difference the data to make it stationary.
+
+**Check for outliers**
+
+```{r}
+traffic_ts_j1 <- traffic_ts_j1 %>%
+  mutate(Z_score = (Vehicles - mean(Vehicles, na.rm = TRUE)) / sd(Vehicles, na.rm = TRUE))
+
+# Identify outliers
+outliers <- traffic_ts_j1 %>%
+  filter(abs(Z_score) > 3)
+
+count(outliers)
+```
+
+```{r}
+traffic_ts_j1 <- traffic_ts_j1 %>%
+  mutate(Z_score = (log(Vehicles) - mean(log(Vehicles), na.rm = TRUE)) / sd(log(Vehicles), na.rm = TRUE))
+
+# Identify outliers
+outliers <- traffic_ts_j1 %>%
+  filter(abs(Z_score) > 3)
+
+count(outliers)
+```
+
+```{r}
+library(tsoutliers)
+
+# Detect outliers using the tsoutliers package
+outliers <- tsoutliers(traffic_ts_j1$Vehicles)
+
+print(outliers)
+```
+
+**Data Distribution:**
+
+```{r}
+# Plot histogram and density plot of original data
+ggplot(traffic_ts_j1, aes(x = Vehicles)) +
+  geom_histogram(aes(y = ..density..), bins = 30, fill = "blue", alpha = 0.7) +
+  geom_density(color = "red") +
+  labs(title = "Histogram and Density Plot of Vehicles", x = "Vehicles", y = "Density")
+```
+
+**Summary Statistics**
+```{r}
+# Summary statistics of original data
+summary(traffic_ts_j1$Vehicles)
+```
+
+
+## Junction 2
+
+**Plot the data:**
+
+```{r}
+traffic_ts_j2 %>% 
+  autoplot(Vehicles) +
+  labs(title = "TS of Vehicles at Junction 2")
+```
+
+```{r}
+traffic_ts_j2 %>% 
+  autoplot(log(Vehicles)) +
+  labs(title = "TS of Vehicles at Junction 2")
+```
+
+Logging the data helps with the heteroskdasticity
+
+**Looking at Autocorrelation Function**
+
+```{r}
+ggAcf(traffic_ts_j2$Vehicles)
+pacf(traffic_ts_j2$Vehicles)
+ggAcf(log(traffic_ts_j2$Vehicles))
+pacf(log(traffic_ts_j2$Vehicles))
+```
+
+The ACF plot suggests that there is a clear seasonality or cyclic pattern in the traffic data.
+The periodic peaks could indicate regular traffic patterns, such as daily or weekly cycles.
+
+The ACF plot shows a significant autocorrelation at lag 1, which slowly decays over time, indicating that each data point is correlated with its previous points.
+
+The PACF plot shows a significant spike at lag 1 and then quickly drops off, with minor spikes at higher lags.
+This suggests that the immediate past value has a strong influence on the current value, but after accounting for the lag 1 effect, the influence of further lags diminishes
+
+**Perform the Dickey-Fuller test:**
+
+```{r}
+adf_result <- adf.test(log(traffic_ts_j2$Vehicles))
+print(adf_result)
+```
+
+The Dickey-Fuller test was the first statistical test developed to test the null hypothesis that a unit root is present in an autoregressive model of a given time series, and that the process is thus not stationary.
+
+P-value = 0.01: Strong evidence against the null hypothesis.
+Decision: Reject the null hypothesis.
+Conclusion: The time series is likely stationary.
+
+**Perform the KPSS Test:**
+
+```{r}
+kpss_result <- kpss.test(log(traffic_ts_j2$Vehicles))
+print(kpss_result)
+```
+
+P-value = 0.01: Strong evidence against the null hypothesis.
+Decision: Reject the null hypothesis.
+Conclusion: The time series is likely non-stationary, suggesting the presence of a unit root.
+
+ADF Test: Suggests the series is stationary.
+KPSS Test: Suggests the series is non-stationary.
+
+**Difference the data to see if we can resolve the stationary issue:**
+
+```{r}
+# Differencing the series
+traffic_j2_diff <- diff(log(traffic_j2$Vehicles))
+
+# Perform the ADF test on differenced series
+adf_result_diff <- adf.test(traffic_j2_diff)
+print(adf_result_diff)
+
+# Perform the KPSS test on differenced series
+kpss_result_diff <- kpss.test(traffic_j2_diff)
+print(kpss_result_diff)
+```
+
+Given the p-value of 0.1, which is greater than the common significance level of 0.05, we fail to reject the null hypothesis.
+This suggests that the series traffic_j2_diff is likely level stationary.
+There is not enough evidence to conclude that the series has a unit root, indicating that differencing the data might have successfully achieved stationarity.
+
+**Detrend the data to see if we can resolve the stationary issue:**
+
+```{r}
+# Detrending the series
+traffic_j2_detrended <- residuals(lm(log(traffic_j2$Vehicles) ~ time(log(traffic_j2$Vehicles))))
+
+# Perform the ADF test on detrended series
+adf_result_detrended <- adf.test(traffic_j2_detrended)
+print(adf_result_detrended)
+
+# Perform the KPSS test on detrended series
+kpss_result_detrended <- kpss.test(traffic_j2_detrended)
+print(kpss_result_detrended)
+
+```
+
+P-value = 0.01: Strong evidence against the null hypothesis.
+Decision: Reject the null hypothesis.
+Conclusion: The time series is likely non-stationary, suggesting the presence of a unit root.
+
+This suggests that we should difference the data to make it stationary.
+
+**Check for outliers**
+
+```{r}
+traffic_ts_j2 <- traffic_ts_j2 %>%
+  mutate(Z_score = (Vehicles - mean(Vehicles, na.rm = TRUE)) / sd(Vehicles, na.rm = TRUE))
+
+# Identify outliers
+outliers <- traffic_ts_j2 %>%
+  filter(abs(Z_score) > 3)
+
+count(outliers)
+```
+
+```{r}
+traffic_ts_j2 <- traffic_ts_j2 %>%
+  mutate(Z_score = (log(Vehicles) - mean(log(Vehicles), na.rm = TRUE)) / sd(log(Vehicles), na.rm = TRUE))
+
+# Identify outliers
+outliers <- traffic_ts_j2 %>%
+  filter(abs(Z_score) > 3)
+
+count(outliers)
+```
+
+```{r}
+library(tsoutliers)
+
+# Detect outliers using the tsoutliers package
+outliers <- tsoutliers(traffic_ts_j2$Vehicles)
+
+print(outliers)
+```
+
+**Data Distribution:**
+```{r}
+# Plot histogram and density plot of original data
+ggplot(traffic_ts_j2, aes(x = Vehicles)) +
+  geom_histogram(aes(y = ..density..), bins = 30, fill = "blue", alpha = 0.7) +
+  geom_density(color = "red") +
+  labs(title = "Histogram and Density Plot of Vehicles", x = "Vehicles", y = "Density")
+```
+
+
+**Summary Statistics**
+```{r}
+# Summary statistics of original data
+summary(traffic_ts_j2$Vehicles)
+```
+
+## Junction 3
+
+**Plot the data:**
+
+```{r}
+traffic_ts_j3 %>% 
+  autoplot(Vehicles) +
+  labs(title = "TS of Vehicles at junction 3")
+```
+
+```{r}
+traffic_ts_j3 %>% 
+  autoplot(log(Vehicles)) +
+  labs(title = "TS of Vehicles at junction 3")
+```
+
+Logging the data helps with the heteroskdasticity
+
+**Looking at Autocorrelation Function**
+
+```{r}
+ggAcf(traffic_ts_j3$Vehicles)
+pacf(traffic_ts_j3$Vehicles)
+ggAcf(log(traffic_ts_j3$Vehicles))
+pacf(log(traffic_ts_j3$Vehicles))
+```
+
+The ACF plot shows significant autocorrelations at multiple lags, which indicates a persistent, long-term correlation structure.
+This can suggest that the series is not stationary, as stationary time series typically have autocorrelations that diminish quickly.
+
+The PACF plot shows that the partial autocorrelations drop off quickly after a few lags, which might indicate that the series could be autoregressive (AR) with a finite order.
+
+**Perform the Dickey-Fuller test:**
+
+```{r}
+adf_result <- adf.test(log(traffic_ts_j3$Vehicles))
+print(adf_result)
+```
+
+The Dickey-Fuller test was the first statistical test developed to test the null hypothesis that a unit root is present in an autoregressive model of a given time series, and that the process is thus not stationary.
+
+P-value = 0.01: Strong evidence against the null hypothesis.
+Decision: Reject the null hypothesis.
+Conclusion: The time series is likely stationary.
+
+**Perform the KPSS Test:**
+
+```{r}
+kpss_result <- kpss.test(log(traffic_ts_j3$Vehicles))
+print(kpss_result)
+```
+
+P-value = 0.01: Strong evidence against the null hypothesis.
+Decision: Reject the null hypothesis.
+Conclusion: The time series is likely non-stationary, suggesting the presence of a unit root.
+
+ADF Test: Suggests the series is stationary.
+KPSS Test: Suggests the series is non-stationary.
+
+**Difference the data to see if we can resolve the stationary issue:**
+
+```{r}
+# Differencing the series
+traffic_j3_diff <- diff(log(traffic_j3$Vehicles))
+
+# Perform the ADF test on differenced series
+adf_result_diff <- adf.test(traffic_j3_diff)
+print(adf_result_diff)
+
+# Perform the KPSS test on differenced series
+kpss_result_diff <- kpss.test(traffic_j3_diff)
+print(kpss_result_diff)
+```
+
+Given the p-value of 0.1, which is greater than the common significance level of 0.05, we fail to reject the null hypothesis.
+This suggests that the series traffic_j3_diff is likely level stationary.
+There is not enough evidence to conclude that the series has a unit root, indicating that differencing the data might have successfully achieved stationarity.
+
+**Detrend the data to see if we can resolve the stationary issue:**
+
+```{r}
+# Detrending the series
+traffic_j3_detrended <- residuals(lm(log(traffic_j3$Vehicles) ~ time(log(traffic_j3$Vehicles))))
+
+# Perform the ADF test on detrended series
+adf_result_detrended <- adf.test(traffic_j3_detrended)
+print(adf_result_detrended)
+
+# Perform the KPSS test on detrended series
+kpss_result_detrended <- kpss.test(traffic_j3_detrended)
+print(kpss_result_detrended)
+
+```
+
+P-value = 0.01: Strong evidence against the null hypothesis.
+Decision: Reject the null hypothesis.
+Conclusion: The time series is likely non-stationary, suggesting the presence of a unit root.
+
+This suggests that we should difference the data to make it stationary.
+
+**Check for outliers**
+
+```{r}
+traffic_ts_j3 <- traffic_ts_j3 %>%
+  mutate(Z_score = (Vehicles - mean(Vehicles, na.rm = TRUE)) / sd(Vehicles, na.rm = TRUE))
+
+# Identify outliers
+outliers <- traffic_ts_j3 %>%
+  filter(abs(Z_score) > 3)
+
+count(outliers)
+```
+
+```{r}
+traffic_ts_j3 <- traffic_ts_j3 %>%
+  mutate(Z_score = (log(Vehicles) - mean(log(Vehicles), na.rm = TRUE)) / sd(log(Vehicles), na.rm = TRUE))
+
+# Identify outliers
+outliers <- traffic_ts_j3 %>%
+  filter(abs(Z_score) > 3)
+
+count(outliers)
+```
+
+```{r}
+library(tsoutliers)
+
+# Detect outliers using the tsoutliers package
+outliers <- tsoutliers(traffic_ts_j3$Vehicles)
+
+print(outliers)
+```
+
+**Data Distribution:**
+
+```{r}
+# Plot histogram and density plot of original data
+ggplot(traffic_ts_j3, aes(x = Vehicles)) +
+  geom_histogram(aes(y = ..density..), bins = 30, fill = "blue", alpha = 0.7) +
+  geom_density(color = "red") +
+  labs(title = "Histogram and Density Plot of Vehicles", x = "Vehicles", y = "Density")
+```
+
+
+**Summary Statistics**
+```{r}
+# Summary statistics of original data
+summary(traffic_ts_j3$Vehicles)
+```
+
+
+## Junction 4
+
+**Plot data:**
+
+```{r}
+traffic_ts_j4 %>% 
+  autoplot(Vehicles) +
+  labs(title = "TS of Vehicles at Junction 4")
+```
+
+```{r}
+traffic_ts_j4 %>% 
+  autoplot(log(Vehicles)) +
+  labs(title = "TS of Vehicles at Junction 4")
+```
+
+Logging the data helps with the heteroskdasticity
+
+**Looking at Autocorrelation Function**
+
+```{r}
+ggAcf(traffic_ts_j4$Vehicles)
+pacf(traffic_ts_j4$Vehicles)
+ggAcf(log(traffic_ts_j4$Vehicles))
+pacf(log(traffic_ts_j4$Vehicles))
+```
+
+The ACF plot shows significant autocorrelations at multiple lags, which indicates a persistent, long-term correlation structure.
+This can suggest that the series is not stationary, as stationary time series typically have autocorrelations that diminish quickly.
+
+The PACF plot shows that the partial autocorrelations drop off quickly after a few lags, which might indicate that the series could be autoregressive (AR) with a finite order.
+
+**Perform the Dickey-Fuller test:**
+
+```{r}
+adf_result <- adf.test(log(traffic_ts_j4$Vehicles))
+print(adf_result)
+```
+
+The Dickey-Fuller test was the first statistical test developed to test the null hypothesis that a unit root is present in an autoregressive model of a given time series, and that the process is thus not stationary.
+
+P-value = 0.01: Strong evidence against the null hypothesis.
+Decision: Reject the null hypothesis.
+Conclusion: The time series is likely stationary.
+
+**Perform the KPSS Test:**
+
+```{r}
+kpss_result <- kpss.test(log(traffic_ts_j4$Vehicles))
+print(kpss_result)
+```
+
+P-value = 0.01: Strong evidence against the null hypothesis.
+Decision: Reject the null hypothesis.
+Conclusion: The time series is likely non-stationary, suggesting the presence of a unit root.
+
+ADF Test: Suggests the series is stationary.
+KPSS Test: Suggests the series is non-stationary.
+
+**Difference the data to see if we can resolve the stationary issue:**
+
+```{r}
+# Differencing the series
+traffic_j4_diff <- diff(log(traffic_j4$Vehicles))
+
+# Perform the ADF test on differenced series
+adf_result_diff <- adf.test(traffic_j4_diff)
+print(adf_result_diff)
+
+# Perform the KPSS test on differenced series
+kpss_result_diff <- kpss.test(traffic_j4_diff)
+print(kpss_result_diff)
+```
+
+Given the p-value of 0.1, which is greater than the common significance level of 0.05, we fail to reject the null hypothesis.
+This suggests that the series traffic_j4_diff is likely level stationary.
+There is not enough evidence to conclude that the series has a unit root, indicating that differencing the data might have successfully achieved stationarity.
+
+**Detrend the data to see if we can resolve the stationary issue:**
+
+```{r}
+# Detrending the series
+traffic_j4_detrended <- residuals(lm(log(traffic_j4$Vehicles) ~ time(log(traffic_j4$Vehicles))))
+
+# Perform the ADF test on detrended series
+adf_result_detrended <- adf.test(traffic_j4_detrended)
+print(adf_result_detrended)
+
+# Perform the KPSS test on detrended series
+kpss_result_detrended <- kpss.test(traffic_j4_detrended)
+print(kpss_result_detrended)
+
+```
+
+P-value = 0.01: Strong evidence against the null hypothesis.
+Decision: Reject the null hypothesis.
+Conclusion: The time series is likely non-stationary, suggesting the presence of a unit root.
+
+This suggests that we should difference the data to make it stationary.
+
+**Check for outliers**
+
+```{r}
+traffic_ts_j4 <- traffic_ts_j4 %>%
+  mutate(Z_score = (Vehicles - mean(Vehicles, na.rm = TRUE)) / sd(Vehicles, na.rm = TRUE))
+
+# Identify outliers
+outliers <- traffic_ts_j4 %>%
+  filter(abs(Z_score) > 3)
+
+count(outliers)
+```
+
+```{r}
+traffic_ts_j4 <- traffic_ts_j4 %>%
+  mutate(Z_score = (log(Vehicles) - mean(log(Vehicles), na.rm = TRUE)) / sd(log(Vehicles), na.rm = TRUE))
+
+# Identify outliers
+outliers <- traffic_ts_j4 %>%
+  filter(abs(Z_score) > 3)
+
+count(outliers)
+```
+
+```{r}
+library(tsoutliers)
+
+# Detect outliers using the tsoutliers package
+outliers <- tsoutliers(traffic_ts_j4$Vehicles)
+
+print(outliers)
+```
+
+**Data Distribution:**
+
+```{r}
+# Plot histogram and density plot of original data
+ggplot(traffic_ts_j4, aes(x = Vehicles)) +
+  geom_histogram(aes(y = ..density..), bins = 30, fill = "blue", alpha = 0.7) +
+  geom_density(color = "red") +
+  labs(title = "Histogram and Density Plot of Vehicles", x = "Vehicles", y = "Density")
+```
+
+
+**Summary Statistics**
+```{r}
+# Summary statistics of original data
+summary(traffic_ts_j4$Vehicles)
+```
+
+

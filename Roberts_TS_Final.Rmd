@@ -1,0 +1,910 @@
+---
+title: "Final Project STL with Multiple Seasonal Periods"
+author: "Madeleine Roberts"
+date: "2024-05-10"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library("tidyverse")
+library(readr)
+library("Metrics")
+library(ggplot2)
+library(ggpubr)
+library(fpp3)
+library(forecast)
+options(warn = -1)
+library(fable)
+library(fabletools)
+library(dplyr)
+library(tsibble)
+```
+
+## Data Setup
+
+```{r, include=FALSE}
+# Clear working memory
+rm(list=ls())
+
+# Set the working directory.
+setwd("/Users/madeleineroberts/rWorkingDirectory")
+```
+
+```{r}
+traffic <- read.csv("traffic.csv")
+
+# Remove any duplicate value or rows with null
+traffic <- traffic %>% filter(complete.cases(traffic))
+traffic <- distinct(traffic)
+
+# Convert DateTime column
+traffic$DateTime <- strptime(traffic$DateTime, format = "%Y-%m-%d %H:%M:%S")
+
+# Separate into different junctions 
+traffic_j1 <- traffic %>% 
+  filter(Junction == 1)
+traffic_j1$log_vehicles <- log(traffic_j1$Vehicles)
+
+traffic_j2 <- traffic %>% 
+  filter(Junction == 2)
+traffic_j2$log_vehicles <- log(traffic_j2$Vehicles)
+
+traffic_j3 <- traffic %>% 
+  filter(Junction == 3)
+traffic_j3$log_vehicles <- log(traffic_j3$Vehicles)
+
+traffic_j4 <- traffic %>% 
+  filter(Junction == 4)
+traffic_j4$log_vehicles <- log(traffic_j4$Vehicles)
+```
+
+
+```{r}
+library(tsoutliers)
+
+# Replace outliers
+outliers <- tsoutliers(traffic_j1$log_vehicles)
+traffic_j1$log_vehicles[outliers$index] <- outliers$replacements
+
+outliers <- tsoutliers(traffic_j1$Vehicles)
+traffic_j1$Vehicles[outliers$index] <- outliers$replacements
+
+outliers <- tsoutliers(traffic_j2$log_vehicles)
+traffic_j2$log_vehicles[outliers$index] <- outliers$replacements
+
+outliers <- tsoutliers(traffic_j2$Vehicles)
+traffic_j2$Vehicles[outliers$index] <- outliers$replacements
+
+outliers <- tsoutliers(traffic_j3$log_vehicles)
+traffic_j3$log_vehicles[outliers$index] <- outliers$replacements
+
+outliers <- tsoutliers(traffic_j3$Vehicles)
+traffic_j3$Vehicles[outliers$index] <- outliers$replacements
+
+outliers <- tsoutliers(traffic_j4$log_vehicles)
+traffic_j4$log_vehicles[outliers$index] <- outliers$replacements
+
+outliers <- tsoutliers(traffic_j4$Vehicles)
+traffic_j4$Vehicles[outliers$index] <- outliers$replacements
+```
+
+
+```{r}
+# List of traffic dataframes
+traffic_list <- list(traffic_j1, traffic_j2, traffic_j3, traffic_j4)
+
+# Initialize lists to store results
+traffic_ts_list <- list()
+traffic_ts_train_list <- list()
+traffic_ts_test_list <- list()
+
+# Loop over the traffic dataframes
+for (i in seq_along(traffic_list)) {
+  # Change time column into a frequency
+  traffic_list[[i]] <- traffic_list[[i]] %>%
+    mutate(Time = row_number())
+  
+  # Convert dataframe to a time series
+  traffic_ts_list[[i]] <- as_tsibble(traffic_list[[i]], index = Time)
+  
+  # Calculate the split index
+  split_index <- floor(0.8 * nrow(traffic_ts_list[[i]]))
+  
+  # Split the data into the test set and training set
+  traffic_ts_train_list[[i]] <- traffic_ts_list[[i]][1:split_index, ]
+  traffic_ts_test_list[[i]] <- traffic_ts_list[[i]][(split_index + 1):nrow(traffic_ts_list[[i]]), ]
+}
+
+# Assign results to individual variables if needed
+traffic_ts_j1 <- traffic_ts_list[[1]]
+traffic_ts_j1_train <- traffic_ts_train_list[[1]]
+traffic_ts_j1_test <- traffic_ts_test_list[[1]]
+
+traffic_ts_j2 <- traffic_ts_list[[2]]
+traffic_ts_j2_train <- traffic_ts_train_list[[2]]
+traffic_ts_j2_test <- traffic_ts_test_list[[2]]
+
+traffic_ts_j3 <- traffic_ts_list[[3]]
+traffic_ts_j3_train <- traffic_ts_train_list[[3]]
+traffic_ts_j3_test <- traffic_ts_test_list[[3]]
+
+traffic_ts_j4 <- traffic_ts_list[[4]]
+traffic_ts_j4_train <- traffic_ts_train_list[[4]]
+traffic_ts_j4_test <- traffic_ts_test_list[[4]]
+
+```
+
+```{r}
+# Plot of the data
+traffic_ts_j1 %>% 
+  autoplot(Vehicles) +
+  labs(title = "TS of Vehicles at Junction 1")
+
+traffic_ts_j1 %>% 
+  autoplot(log(Vehicles)) +
+  labs(title = "TS of Logged Vehicles at Junction 1")
+
+traffic_ts_j2 %>% 
+  autoplot(Vehicles) +
+  labs(title = "TS of Vehicles at Junction 2")
+
+traffic_ts_j2 %>% 
+  autoplot(log(Vehicles)) +
+  labs(title = "TS of Logged Vehicles at Junction 2")
+
+traffic_ts_j3 %>% 
+  autoplot(Vehicles) + 
+  labs(title = "TS of Vehicles at Junction 3")
+
+traffic_ts_j3 %>% 
+  autoplot(log(Vehicles)) + 
+  labs(title = "TS of Logged Vehicles at Junction 3")
+
+traffic_ts_j4 %>% 
+  autoplot(Vehicles) +
+  labs(title = "TS of Vehicles at Junction 4")
+
+traffic_ts_j4 %>% 
+  autoplot(log(Vehicles)) +
+  labs(title = "TS of Logged Vehicles at Junction 4")
+```
+
+## Junction #1
+
+```{r}
+traffic_ts_j1_train |>
+  model(
+    STL(log_vehicles ~ season(period = 24),
+        robust = TRUE)
+  ) |>
+  components() |>
+  autoplot() + labs(x = "Logged Vehicles", title = "STL Decompostion for Junction 1 - Hourly")
+```
+
+```{r}
+traffic_ts_j1_train |>
+  model(
+    STL(log_vehicles ~ season(period = 24) +
+                      season(period = 7*24),
+        robust = TRUE)
+  ) |>
+  components() |>
+  autoplot() + labs(x = "Logged Vehicles", title = "STL Decompostion for Junction 1 - Hourly, Daily")
+```
+
+```{r}
+traffic_ts_j1_train |>
+  model(
+    STL(log_vehicles ~ season(period = 24) +
+                      season(period = 7*24) +
+                      season(period = 7*24*30),
+        robust = TRUE)
+  ) |>
+  components() |>
+  autoplot() + labs(x = "Logged Vehicles", title = "STL Decompostion for Junction 1 - Hourly, Daily, Monthly")
+```
+
+### Model 1
+
+```{r}
+# Forecasts from STL+ETS decomposition Hourly
+STL_ETS_j1 <- decomposition_model(
+  STL(log_vehicles ~ season(period = 24) 
+                   ,
+      robust = TRUE),
+  ETS(season_adjust ~ season("N"))
+)
+
+model_fit_j1 <- traffic_ts_j1_train |>
+  model(STL_ETS_j1)
+
+model_summary_j1 <- model_fit_j1 |>
+  report()
+
+fc_j1 <- traffic_ts_j1_train |>
+  model(STL_ETS_j1) |>
+  forecast(h = 2919)
+
+fc_j1 |>
+  fill_gaps() |>
+  autoplot(traffic_ts_j1_test) +
+  labs(y = "Vehicles",
+       title = "Junction #1 - Forecasted vs Actual Logged Vehicle Counts\nusing STL+ETS Decomposition with Hourly Seasonality")
+
+fc_j1 |>
+  fill_gaps() |>
+  autoplot(traffic_ts_j1) +
+ labs(y = "Vehicles", title = "Junction #1 - Long-Term Logged Vehicle Count Forecast\nusing STL+ETS Decomposition with Hourly Seasonality")
+
+
+accuracy((fc_j1$.mean), (traffic_ts_j1_test$log_vehicles))
+```
+
+The first model employs STL decomposition combined with an ETS(A,N,N) model for the seasonally adjusted series and a Seasonal Naive (SNAIVE) model for the hourly seasonality. The ETS(A,N,N) model, with a smoothing parameter (alpha) of 0.5363824, provides a reasonable fit but with relatively high AIC (55808.93) and BIC (55831.02) values, indicating some model complexity without substantial fit improvement. The SNAIVE component has a very low residual variance (sigma\^2 = 0.0001), suggesting it accurately captures the repetitive seasonal pattern. The test set performance shows moderate accuracy, with an RMSE of 0.2380813 and a MAPE of 4.743214, indicating reasonable but not exceptional predictive accuracy.
+
+### Model 2
+
+```{r}
+# Forecasts from STL+ETS decomposition Hourly and Daily
+STL_ETS_j1 <- decomposition_model(
+  STL(log_vehicles ~ season(period = 24) +
+                    season(period = 7*24),
+      robust = TRUE),
+  ETS(season_adjust ~ season("N"))
+)
+
+model_fit_j1 <- traffic_ts_j1_train |>
+  model(STL_ETS_j1)
+
+model_summary_j1 <- model_fit_j1 |>
+  report()
+
+fc_j1 <- traffic_ts_j1_train |>
+  model(STL_ETS_j1) |>
+  forecast(h = 2919)
+
+fc_j1 |>
+  fill_gaps() |>
+  autoplot(traffic_ts_j1_test) +
+  labs(y = "Vehicles",
+       title = "Junction #1 - Forecasted vs Actual Logged Vehicle Counts\nusing STL+ETS Decomposition with Hourly & Daily Seasonality")
+
+fc_j1 |>
+  fill_gaps() |>
+  autoplot(traffic_ts_j1) +
+ labs(y = "Vehicles", title = "Junction #1 - Long-Term Logged Vehicle Count Forecast\nusing STL+ETS Decomposition with Hourly & Daily Seasonality")
+
+
+accuracy(fc_j1$.mean, traffic_ts_j1_test$log_vehicles)
+```
+
+The second model enhances the complexity by incorporating an additional daily seasonal component into the STL decomposition. The seasonally adjusted series (ETS(A,N,N)) shows improved accuracy with a lower smoothing parameter (alpha = 0.3119007) and significantly reduced AIC (52798.36) and BIC (52820.46) values, indicating a better model fit compared to Model 1. The SNAIVE model for both 24-period and 168-period seasonality components maintains low residual variances (0.0001 and 0 respectively), signifying high accuracy in capturing seasonal patterns. Test set metrics further show its superior accuracy with an RMSE of 0.1504033 and a MAPE of 2.778169, indicating more precise and reliable predictions than Model 1.
+
+### Model 3
+
+```{r}
+# Forecasts from STL+ETS decomposition Hourly Daily and Monthly
+STL_ETS_j1 <- decomposition_model(
+  STL(log_vehicles ~ season(period = 24) +
+                    season(period = 7*24)+
+                      season(period = 7*24*30),
+      robust = TRUE),
+  ETS(season_adjust ~ season("N"))
+)
+
+model_fit_j1 <- traffic_ts_j1_train |>
+  model(STL_ETS_j1)
+
+model_summary_j1 <- model_fit_j1 |>
+  report()
+
+fc_j1 <- traffic_ts_j1_train |>
+  model(STL_ETS_j1) |>
+  forecast(h = 2919)
+
+fc_j1 |>
+  fill_gaps() |>
+  autoplot(traffic_ts_j1_test) +
+  labs(y = "Vehicles",
+       title = "Junction #1 - Forecasted vs Actual Logged Vehicle Counts using\nSTL+ETS Decomposition with Hourly, Daily, & Monthly Seasonality")
+
+fc_j1 |>
+  fill_gaps() |>
+  autoplot(traffic_ts_j1) +
+ labs(y = "Vehicles", title = "Junction #1 - Long-Term Logged Vehicle Count Forecast using\nSTL+ETS Decomposition with Hourly, Daily, & Monthly Seasonality")
+
+
+accuracy(fc_j1$.mean, traffic_ts_j1_test$log_vehicles)
+```
+
+The third model further extends complexity by adding a monthly seasonal component. While the seasonally adjusted series (ETS(A,N,N)) shows a slightly higher smoothing parameter (alpha = 0.2783517) and maintains a relatively low variance (sigma\^2 = 0.0082), the inclusion of multiple seasonal components does not significantly enhance model performance. Although the residual variance remains low for the 24-period (0.0001), 168-period (0), and 5040-period (0.0006) SNAIVE components, the overall accuracy does not substantially improve. Test set metrics, with an RMSE of 0.1770705 and a MAPE of 3.28003, indicate moderate improvement over Model 1 but not as marked as Model 2, suggesting potential overfitting with the added complexity.
+
+Among the three models, Model 2 stands out with the best balance of complexity and predictive accuracy. Its lower AIC and BIC values indicate a better fit, and the test set metrics (RMSE of 0.1504033 and MAPE of 2.778169) demonstrate superior predictive performance. Model 1, while simpler, shows less accurate predictions, and Model 3, despite its added complexity, does not significantly outperform Model 2, indicating that the optimal model complexity lies within the second model's structure.
+
+## Junction 2
+
+```{r}
+traffic_ts_j2_train |>
+  model(
+    STL(log_vehicles ~ season(period = 24),
+        robust = TRUE)
+  ) |>
+  components() |>
+  autoplot() + labs(x = "Logged Vehicles", title = "STL Decompostion for Junction 2 - Hourly")
+```
+
+```{r}
+traffic_ts_j2_train |>
+  model(
+    STL(log_vehicles ~ season(period = 24) +
+                      season(period = 7*24),
+        robust = TRUE)
+  ) |>
+  components() |>
+  autoplot() + labs(x = "Logged Vehicles", title = "STL Decompostion for Junction 2 - Hourly, Daily")
+```
+
+```{r}
+traffic_ts_j2_train |>
+  model(
+    STL(log_vehicles ~ season(period = 24) +
+                      season(period = 7*24) +
+                      season(period = 7*24*30),
+        robust = TRUE)
+  ) |>
+  components() |>
+  autoplot() + labs(x = "Logged Vehicles", title = "STL Decompostion for Junction 2 - Hourly, Daily, Monthly")
+```
+
+### Model 1
+
+```{r}
+# Forecasts from STL+ETS decomposition hourly
+STL_ETS_j2 <- decomposition_model(
+  STL(log_vehicles ~ season(period = 24),
+      robust = TRUE),
+  ETS(season_adjust ~ season("N"))
+)
+
+model_fit_j2 <- traffic_ts_j2_train |>
+  model(STL_ETS_j2)
+
+model_summary_j2 <- model_fit_j2 |>
+  report()
+
+fc_j2 <- traffic_ts_j2_train |>
+  model(STL_ETS_j2) |>
+  forecast(h = 2919)
+
+fc_j2 |>
+  fill_gaps() |>
+  autoplot(traffic_ts_j2_test) +
+  labs(y = "Vehicles",
+       title = "Junction #2 - Forecasted vs Actual Logged Vehicle Counts\nusing STL+ETS Decomposition with Hourly Seasonality")
+
+fc_j2 |>
+  fill_gaps() |>
+  autoplot(traffic_ts_j2) +
+ labs(y = "Vehicles", title = "Junction #2 - Long-Term Logged Vehicle Count Forecast\nusing STL+ETS Decomposition with Hourly Seasonality")
+
+accuracy(fc_j2$.mean, traffic_ts_j2_test$log_vehicles)
+```
+
+### Model 2
+
+```{r}
+# Forecasts from STL+ETS decomposition hourly and daily
+STL_ETS_j2 <- decomposition_model(
+  STL(log_vehicles~ season(period = 24) +
+                    season(period = 7*24),
+      robust = TRUE),
+  ETS(season_adjust ~ season("N"))
+)
+
+model_fit_j2 <- traffic_ts_j2_train |>
+  model(STL_ETS_j2)
+
+model_summary_j2 <- model_fit_j2 |>
+  report()
+
+fc_j2 <- traffic_ts_j2_train |>
+  model(STL_ETS_j2) |>
+  forecast(h = 2919)
+
+fc_j2 |>
+  fill_gaps() |>
+  autoplot(traffic_ts_j2_test) +
+  labs(y = "Vehicles",
+       title = "Junction #2 - Forecasted vs Actual Logged Vehicle Counts using\nSTL+ETS Decomposition with Hourly & Daily Seasonality")
+
+fc_j2 |>
+  fill_gaps() |>
+  autoplot(traffic_ts_j2) +
+ labs(y = "Vehicles", title = "Junction #2 - Long-Term Logged Vehicle Count Forecast\nusing STL+ETS Decomposition with Hourly & Daily Seasonality")
+
+accuracy(fc_j2$.mean, traffic_ts_j2_test$log_vehicles)
+```
+
+The addition of season_168 significantly improves the model's accuracy. The RMSE, MAE, and MAPE values are much lower compared to the previous combination, indicating better fit and reduced error. This combination shows the best performance metrics. The RMSE, MAE, and MAPE values are the lowest, indicating the highest accuracy. The minimal ME and MPE values suggest little bias in the forecast.
+
+### Model 3
+
+```{r}
+# Forecasts from STL+ETS decomposition hourly, daily, and monthly
+STL_ETS_j2 <- decomposition_model(
+  STL(log_vehicles ~ season(period = 24) +
+                    season(period = 7*24) + 
+        season(period = 7*24*30),
+      robust = TRUE),
+  ETS(season_adjust ~ season("N"))
+)
+
+model_fit_j2 <- traffic_ts_j2_train |>
+  model(STL_ETS_j2)
+
+model_summary_j2 <- model_fit_j2 |>
+  report()
+
+fc_j2 <- traffic_ts_j2_train |>
+  model(STL_ETS_j2) |>
+  forecast(h = 2919)
+
+fc_j2 |>
+  fill_gaps() |>
+  autoplot(traffic_ts_j2_test) +
+  labs(y = "Vehicles",
+       title = "Junction #2 - Forecasted vs Actual Logged Vehicle Counts\nusing STL+ETS Decomposition with Hourly, Daily, & Monthly Seasonality")
+
+fc_j2 |>
+  fill_gaps() |>
+  autoplot(traffic_ts_j2) +
+ labs(y = "Vehicles", title = "Junction #2 - Long-Term Logged Vehicle Count Forecast\nusing STL+ETS Decomposition with Hourly, Daily, & Monthly Seasonality")
+
+accuracy(fc_j2$.mean, traffic_ts_j2_test$log_vehicles)
+
+```
+
+Model 2 is the best choice among the three due to its superior performance across multiple metrics. It has the lowest Root Mean Squared Error (0.1949424), Mean Absolute Error (0.1549888), Mean Percentage Error (1.926726), and Mean Absolute Percentage Error (4.970853), indicating higher accuracy and consistency in predictions. Additionally, Model 2 boasts the lowest Akaike Information Criterion (70408.60) and Bayesian Information Criterion (70430.69), suggesting it achieves a good balance between model fit and complexity. Overall, Model 2's consistently lower error rates and better information criteria values make it the most reliable and efficient model.
+
+Based on the analysis, the model combination of Season_adjust + season_24 + season_168 demonstrates the highest accuracy and the lowest error rates. This combination should be preferred for forecasting as it provides the most reliable and least biased predictions.
+
+## Junction 3
+
+```{r}
+traffic_ts_j3_train |>
+  model(
+    STL(log_vehicles ~ season(period = 24),
+        robust = TRUE)
+  ) |>
+  components() |>
+  autoplot() + labs(x = "Vehicles", title = "STL Decompostion for Junction 3 - Hourly")
+```
+
+```{r}
+traffic_ts_j3_train |>
+  model(
+    STL((log_vehicles) ~ season(period = 24) +
+                      season(period = 7*24),
+        robust = TRUE)
+  ) |>
+  components() |>
+  autoplot() + labs(x = "Vehicles", title = "STL Decompostion for Junction 3 - Hourly, Daily")
+```
+
+```{r}
+traffic_ts_j3_train |>
+  model(
+    STL((log_vehicles) ~ season(period = 24) +
+                      season(period = 7*24) +
+                      season(period = 7*24*30),
+        robust = TRUE)
+  ) |>
+  components() |>
+  autoplot() + labs(x = "Vehicles", title = "STL Decompostion for Junction 3 - Hourly, Daily, Monthly")
+```
+
+### Model 1
+
+```{r}
+# Forecasts from STL+ETS decomposition logged hourly
+STL_ETS_j3 <- decomposition_model(
+  STL(log_vehicles ~ season(period = 24) 
+                   ,
+      robust = TRUE),
+  ETS(season_adjust ~ season("N"))
+)
+
+model_fit_j3 <- traffic_ts_j3_train |>
+  model(STL_ETS_j3)
+
+model_summary_j3 <- model_fit_j3 |>
+  report()
+
+fc_j3 <- traffic_ts_j3_train |>
+  model(STL_ETS_j3) |>
+  forecast(h = 2919)
+
+fc_j3 |>
+  fill_gaps() |>
+  autoplot(traffic_ts_j3_test) +
+  labs(y = "Vehicles",
+       title = "Junction #3 - Forecasted vs Actual Logged Vehicle Counts\nusing STL+ETS Decomposition with Hourly Seasonality")
+
+fc_j3 |>
+  fill_gaps() |>
+  autoplot(traffic_ts_j3) +
+ labs(y = "Vehicles", title = "Junction #3 - Long-Term Logged Vehicle Count Forecast\nusing STL+ETS Decomposition with Hourly Seasonality")
+
+accuracy(fc_j3$.mean, traffic_ts_j3_test$log_vehicles)
+```
+
+### Model 2
+
+```{r}
+# Forecasts from STL+ETS decomposition logged hourly and daily
+STL_ETS_j3 <- decomposition_model(
+  STL(log_vehicles ~ season(period = 24) +
+                    season(period = 7*24),
+      robust = TRUE),
+  ETS(season_adjust ~ season("N"))
+)
+
+model_fit_j3 <- traffic_ts_j3_train |>
+  model(STL_ETS_j3)
+
+model_summary_j3 <- model_fit_j3 |>
+  report()
+
+fc_j3 <- traffic_ts_j3_train |>
+  model(STL_ETS_j3) |>
+  forecast(h = 2919)
+
+fc_j3 |>
+  fill_gaps() |>
+  autoplot(traffic_ts_j3_test) +
+  labs(y = "Vehicles",
+       title = "Junction #3 - Forecasted vs Actual Logged Vehicle Counts\n using STL+ETS Decomposition with Hourly & Daily Seasonality")
+
+fc_j3 |>
+  fill_gaps() |>
+  autoplot(traffic_ts_j3) +
+ labs(y = "Vehicles", title = "Junction #3 - Long-Term Logged Vehicle Count Forecast\nusing STL+ETS Decomposition with Hourly & Daily Seasonality")
+
+accuracy(fc_j3$.mean, traffic_ts_j3_test$log_vehicles)
+```
+
+### Model 3
+
+```{r}
+# Forecasts from STL+ETS decomposition logged hourly daily and hourly
+STL_ETS_j3 <- decomposition_model(
+  STL(log_vehicles ~ season(period = 24) +
+                    season(period = 7*24) +
+        season(period = 7*24*30),
+      robust = TRUE),
+  ETS(season_adjust ~ season("N"))
+)
+
+model_fit_j3 <- traffic_ts_j3_train |>
+  model(STL_ETS_j3)
+
+model_summary_j3 <- model_fit_j3 |>
+  report()
+
+fc_j3 <- traffic_ts_j3_train |>
+  model(STL_ETS_j3) |>
+  forecast(h = 2919)
+
+fc_j3 |>
+  fill_gaps() |>
+  autoplot(traffic_ts_j3_test) +
+  labs(y = "Vehicles",
+       title = "Junction #3 - Forecasted vs Actual Logged Vehicle Counts\nusing STL+ETS Decomposition with Hourly, Daily, & Monthly Seasonality")
+
+fc_j3 |>
+  fill_gaps() |>
+  autoplot(traffic_ts_j3) +
+ labs(y = "Vehicles", title = "Junction #3 - Long-Term Logged Vehicle Count Forecast\nusing STL+ETS Decomposition with Hourly, Daily, & Monthly Seasonality")
+
+accuracy(fc_j3$.mean, traffic_ts_j3_test$log_vehicles)
+```
+
+### Model 4
+
+```{r}
+# Forecasts from STL+ETS decomposition hourly
+STL_ETS_j3 <- decomposition_model(
+  STL((Vehicles) ~ season(period = 24) 
+                   ,
+      robust = TRUE),
+  ETS(season_adjust ~ season("N"))
+)
+
+model_fit_j3 <- traffic_ts_j3_train |>
+  model(STL_ETS_j3)
+
+model_summary_j3 <- model_fit_j3 |>
+  report()
+
+fc_j3 <- traffic_ts_j3_train |>
+  model(STL_ETS_j3) |>
+  forecast(h = 2919)
+
+fc_j3 |>
+  fill_gaps() |>
+  autoplot(traffic_ts_j3_test) +
+  labs(y = "Vehicles",
+       title = "Junction #3 - Forecasted vs Actual Vehicle Counts\nusing STL+ETS Decomposition with Hourly Seasonality")
+
+fc_j3 |>
+  fill_gaps() |>
+  autoplot(traffic_ts_j3) +
+ labs(y = "Vehicles", title = "Junction #3 - Long-Term Vehicle Count Forecast\nusing STL+ETS Decomposition with Hourly Seasonality")
+
+accuracy(fc_j3$.mean, traffic_ts_j3_test$Vehicles)
+```
+
+### Model 5
+
+```{r}
+# Forecasts from STL+ETS decomposition hourly and daily
+STL_ETS_j3 <- decomposition_model(
+  STL((Vehicles) ~ season(period = 24) +
+                    season(period = 7*24),
+      robust = TRUE),
+  ETS(season_adjust ~ season("N"))
+)
+
+model_fit_j3 <- traffic_ts_j3_train |>
+  model(STL_ETS_j3)
+
+model_summary_j3 <- model_fit_j3 |>
+  report()
+
+fc_j3 <- traffic_ts_j3_train |>
+  model(STL_ETS_j3) |>
+  forecast(h = 2919)
+
+fc_j3 |>
+  fill_gaps() |>
+  autoplot(traffic_ts_j3_test) +
+  labs(y = "Vehicles",
+       title = "Junction #3 - Forecasted vs Actual Vehicle Counts\nusing STL+ETS Decomposition with Hourly & Daily Seasonality")
+
+fc_j3 |>
+  fill_gaps() |>
+  autoplot(traffic_ts_j3) +
+ labs(y = "Vehicles", title = "Junction #3 - Long-Term Vehicle Count Forecast\nusing STL+ETS Decomposition with Hourly & Daily Seasonality")
+
+accuracy(fc_j3$.mean, traffic_ts_j3_test$Vehicles)
+```
+
+### Model 6
+
+```{r}
+# Forecasts from STL+ETS decomposition hourly daily and monthly
+STL_ETS_j3 <- decomposition_model(
+  STL((Vehicles) ~ season(period = 24) +
+                    season(period = 7*24) +
+        season(period = 7*24*30),
+      robust = TRUE),
+  ETS(season_adjust ~ season("N"))
+)
+
+model_fit_j3 <- traffic_ts_j3_train |>
+  model(STL_ETS_j3)
+
+model_summary_j3 <- model_fit_j3 |>
+  report()
+
+fc_j3 <- traffic_ts_j3_train |>
+  model(STL_ETS_j3) |>
+  forecast(h = 2919)
+
+fc_j3 |>
+  fill_gaps() |>
+  autoplot(traffic_ts_j3_test) +
+  labs(y = "Vehicles",
+       title = "Junction #3 - Forecasted vs Actual Vehicle Counts\nusing STL+ETS Decomposition with Hourly, Daily, & Monthly Seasonality")
+
+fc_j3 |>
+  fill_gaps() |>
+  autoplot(traffic_ts_j3) +
+ labs(y = "Vehicles", title = "Junction #3 - Long-Term Vehicle Count Forecast\nusing STL+ETS Decomposition with Hourly, Daily, & Monthly Seasonality")
+
+accuracy(fc_j3$.mean, traffic_ts_j3_test$Vehicles)
+```
+
+**Analysis and Conclusion**
+
+Logged vs. Non-Logged Transformations: The logged transformation models consistently show much metrics , indicating a better fit to the data. We wanted to test both logged and non-logged models as these junctions were more homoskedastic; however, the results indicate that logging the values is the correct choice.
+
+Logged Models: Model 2 has the lowest AIC and BIC, indicating it balances model fit and complexity better than Models 1 and 3. Model 1 has the lowest RMSE and MAE, indicating it has the best predictive accuracy. Model 2 has the lowest MAPE, indicating it has the lowest average percentage error.
+
+Best Model: The best model out of the six is the Logged Transformation with hourly and daily seasonality (season_adjust + season_24 + season_168). Model 2 has the lowest AIC and BIC, indicating a better balance of model fit and complexity. While its RMSE is slightly higher than Model 1, it has the lowest MAPE, suggesting it handles percentage errors better. This model while close to model 1 is better at balancing both complexity and predictive performance.
+
+## Junction 4
+
+```{r}
+traffic_ts_j4_train |>
+  model(
+    STL((log_vehicles) ~ season(period = 24),
+        robust = TRUE)
+  ) |>
+  components() |>
+  autoplot() + labs(x = "Vehicles", title = "STL Decompostion for Junction 4 - Hourly")
+```
+
+```{r}
+traffic_ts_j4_train |>
+  model(
+    STL((log_vehicles) ~ season(period = 24) +
+                      season(period = 7*24),
+        robust = TRUE)
+  ) |>
+  components() |>
+  autoplot() + labs(x = "Vehicles", title = "STL Decompostion for Junction 4 - Hourly, Daily")
+```
+
+```{r}
+traffic_ts_j4_train |>
+  model(
+    STL((log_vehicles) ~ season(period = 24) +
+                      season(period = 7*24) +
+                      season(period = 7*24*30),
+        robust = TRUE)
+  ) |>
+  components() |>
+  autoplot() + labs(x = "Logged Vehicles", title = "STL Decompostion for Junction 4 - Hourly, Daily, Monthly")
+```
+
+### Model 1
+
+```{r}
+# Forecasts from STL+ETS decomposition hourly
+STL_ETS_j4 <- decomposition_model(
+  STL(log_vehicles ~ season(period = 24),
+      robust = TRUE),
+  ETS(season_adjust ~ season("N"))
+)
+
+model_fit_j4 <- traffic_ts_j4_train |>
+  model(STL_ETS_j4)
+
+model_summary_j4 <- model_fit_j4 |>
+  report()
+
+fc_j4 <- traffic_ts_j4_train |>
+  model(STL_ETS_j4) |>
+  forecast(h = 869)
+
+fc_j4 |>
+  fill_gaps() |>
+  autoplot(traffic_ts_j4_test) +
+  labs(y = "Logged Vehicles",
+       title = "Junction #4 - Forecasted vs Actual Log Vehicle Counts\nusing STL+ETS Decomposition with Hourly Seasonality")
+
+fc_j4 |>
+  fill_gaps() |>
+  autoplot(traffic_ts_j4) +
+  labs(y = "Logged Vehicles",
+       title = "Junction #4 - Long-Term Log Vehicle Count Forecast\nusing STL+ETS Decomposition with Hourly Monthly Seasonality")
+
+accuracy(fc_j4$.mean, traffic_ts_j4_test$log_vehicles)
+```
+
+### Model 2
+
+```{r}
+# Forecasts from STL+ETS decomposition hourly and daily
+STL_ETS_j4 <- decomposition_model(
+  STL(log_vehicles ~ season(period = 24) +
+                    season(period = 7*24),
+      robust = TRUE),
+  ETS(season_adjust ~ season("N"))
+)
+
+model_fit_j4 <- traffic_ts_j4_train |>
+  model(STL_ETS_j4)
+
+model_summary_j4 <- model_fit_j4 |>
+  report()
+
+fc_j4 <- traffic_ts_j4_train |>
+  model(STL_ETS_j4) |>
+  forecast(h = 869)
+
+fc_j4 |>
+  fill_gaps() |>
+  autoplot(traffic_ts_j4_test) +
+  labs(y = "Logged Vehicles",
+       title = "Junction #4 - Forecasted vs Actual Log Vehicle Counts\nusing STL+ETS Decomposition with Hourly & Daily Seasonality")
+
+fc_j4 |>
+  fill_gaps() |>
+  autoplot(traffic_ts_j4) +
+  labs(y = "Logged Vehicles",
+       title = "Junction #4 - Forecasted vs Actual Log Vehicle Counts\nusing STL+ETS Decomposition with Hourly & Daily Seasonality")
+
+accuracy(fc_j4$.mean, traffic_ts_j4_test$log_vehicles)
+```
+
+### Model 3
+
+```{r}
+# Forecasts from STL+ETS decomposition hourly
+STL_ETS_j4 <- decomposition_model(
+  STL((Vehicles) ~ season(period = 24),
+      robust = TRUE),
+  ETS(season_adjust ~ season("N"))
+)
+
+model_fit_j4 <- traffic_ts_j4_train |>
+  model(STL_ETS_j4)
+
+model_summary_j4 <- model_fit_j4 |>
+  report()
+
+fc_j4 <- traffic_ts_j4_train |>
+  model(STL_ETS_j4) |>
+  forecast(h = 869)
+
+fc_j4 |>
+  fill_gaps() |>
+  autoplot(traffic_ts_j4_test) +
+  labs(y = " Vehicles",
+       title = "Junction #4 - Forecasted vs Actual Vehicle Counts\nusing STL+ETS Decomposition with Hourly Seasonality")
+
+fc_j4 |>
+  fill_gaps() |>
+  autoplot(traffic_ts_j4) +
+  labs(y = " Vehicles",
+       title = "Junction #4 - Forecasted vs Actual Vehicle Counts\nusing STL+ETS Decomposition with Hourly Seasonality")
+
+accuracy(fc_j4$.mean, traffic_ts_j4_test$Vehicles)
+```
+
+### Model 4
+
+```{r}
+# Forecasts from STL+ETS decomposition hourly and daily
+STL_ETS_j4 <- decomposition_model(
+  STL((Vehicles) ~ season(period = 24) +
+                    season(period = 7*24),
+      robust = TRUE),
+  ETS(season_adjust ~ season("N"))
+)
+
+model_fit_j4 <- traffic_ts_j4_train |>
+  model(STL_ETS_j4)
+
+model_summary_j4 <- model_fit_j4 |>
+  report()
+
+fc_j4 <- traffic_ts_j4_train |>
+  model(STL_ETS_j4) |>
+  forecast(h = 869)
+
+fc_j4 |>
+  fill_gaps() |>
+  autoplot(traffic_ts_j4_test) +
+  labs(y = "Vehicles",
+       title = "Junction #4 - Forecasted vs Actual Vehicle Counts\nusing STL+ETS Decomposition with Hourly & Daily Seasonality")
+
+fc_j4 |>
+  fill_gaps() |>
+  autoplot(traffic_ts_j4) +
+  labs(y = "Vehicles",
+       title = "Junction #4 - Forecasted vs Actual Vehicle Counts\nusing STL+ETS Decomposition with Hourly & Daily Seasonality")
+
+accuracy(fc_j4$.mean, traffic_ts_j4_test$Vehicles)
+```
+
+**Conclusion and Analysis**
+
+Again, we observe that log transformation improves the stability and accuracy of models by stabilizing the variance. Without log, we observe higher sigma\^2 values and less accurate predictions.
+
+Model 2 has significantly lower AIC and BIC values compared to Model 1, indicating a better balance of fit and complexity and a slightly lower sigma\^2 for the ETS component, suggesting it may capture the underlying patterns better. However, Model 1 has better performance metrics (ME, RMSE, MAE) for the simpler season_adjust + season_24 combination.
+
+Despite having slightly higher error metrics, we will prefer Model 2 because we choose to prioritize overall model fit and complexity over minimizing prediction error.
