@@ -1,6 +1,6 @@
 Group 2: timeseriesDISCOVERy Final Project Presentation
 
-This document serves as the README for the final project presentation by Group 2, focusing on traffic pattern analysis and prediction. The project, titled "Traffic Prediction," aims to forecast future traffic congestion levels at specific road junctions using over 48,000 historical observations.
+This project focuses on traffic pattern analysis and aims to forecast future traffic congestion levels at specific road junctions using over 48,000 historical observations.
 
 Team Members:
 - Madeleine Roberts
